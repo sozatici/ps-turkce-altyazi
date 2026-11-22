@@ -1,0 +1,61 @@
+name: Android TV APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: SDK parçaları
+        run: sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Python bağımlılıkları
+        run: pip install protobuf grpcio-tools
+
+      - name: İmza ayarı
+        run: |
+          cat > android/local.properties <<EOF
+          sdk.dir=$ANDROID_HOME
+          chiakiKeystore=../psaltyazi.jks
+          chiakiKeystorePW=psaltyazi123
+          chiakiKeyAlias=psaltyazi
+          chiakiKeyPW=psaltyazi123
+          EOF
+
+      - name: Derle
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+          mkdir -p ../out
+          cp app/build/outputs/apk/release/*.apk ../out/PSAltyazi.apk
+          ls -la ../out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PSAltyazi
+          path: out/PSAltyazi.apk
+
+      - name: Yayınla
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: PS Türkçe Altyazı v${{ github.run_number }}
+          files: out/PSAltyazi.apk
+          make_latest: true
