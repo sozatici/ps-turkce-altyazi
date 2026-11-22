@@ -13,6 +13,13 @@ import android.view.PixelCopy
 import android.view.SurfaceView
 import android.view.View
 import android.widget.TextView
+import android.widget.Toast
+import androidx.preference.PreferenceManager
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
@@ -67,6 +74,10 @@ class SubtitleTranslator(
 	private var lastSource = ""        // en son çevrilen metin (normalize)
 	private var lastSeenTime = 0L
 	private val cache = LinkedHashMap<String, String>(64, 0.75f, true)
+	private val gptCache = HashMap<String, String>()
+	private val recentLines = ArrayDeque<String>()    // bağlam için son altyazılar
+	private val gptExecutor = Executors.newSingleThreadExecutor()
+	private var gptErrorShown = false
 
 	fun start()
 	{
@@ -108,6 +119,7 @@ class SubtitleTranslator(
 		stop()
 		recognizer.close()
 		translator.close()
+		gptExecutor.shutdownNow()
 	}
 
 	private val tick = object : Runnable
@@ -239,6 +251,8 @@ class SubtitleTranslator(
 
 		lastSource = norm
 		lastSeenTime = SystemClock.uptimeMillis()
+		gptCache[norm]?.let { show(it); return }
+		requestGpt(raw, norm)
 		cache[norm]?.let { show(it); return }
 
 		translator.translate(raw)
@@ -246,10 +260,75 @@ class SubtitleTranslator(
 				cache[norm] = tr
 				if(cache.size > 300)
 					cache.remove(cache.keys.first())
-				if(lastSource == norm)
+				if(lastSource == norm && !gptCache.containsKey(norm))
 					show(tr)
 			}
 			.addOnFailureListener { Log.w(TAG, "Çeviri hatası", it) }
+	}
+
+	/** API anahtarı girildiyse ChatGPT ile daha doğal çeviri alır; gelince cihaz çevirisinin yerine geçer. */
+	private fun requestGpt(raw: String, norm: String)
+	{
+		val prefs = PreferenceManager.getDefaultSharedPreferences(surfaceView.context)
+		val key = prefs.getString("openai_api_key", null)?.trim().orEmpty()
+		if(key.isEmpty())
+			return
+		val model = prefs.getString("openai_model", null)?.trim().takeUnless { it.isNullOrEmpty() } ?: "gpt-5.4-nano"
+		val context = recentLines.joinToString("\n")
+		recentLines.addLast(raw)
+		while(recentLines.size > 4)
+			recentLines.removeFirst()
+
+		gptExecutor.execute {
+			try
+			{
+				val system = "Sen bir oyun altyazı çevirmenisin. Oyun: GTA (Grand Theft Auto). " +
+					"Gelen İngilizce altyazıyı doğal, akıcı, konuşma dilinde Türkçeye çevir. Argo ve küfürleri anlamına uygun Türkçe karşılıklarıyla çevir. " +
+					"Metin ekrandan okunduğu için küçük harf hataları olabilir; anlamdan düzelt. Karakter ve yer adlarını çevirme. " +
+					"Sadece çeviriyi yaz, açıklama ekleme."
+				val user = (if(context.isNotEmpty()) "Önceki altyazılar (sadece bağlam için, çevirme):\n$context\n\n" else "") +
+					"Çevrilecek altyazı:\n$raw"
+				val body = JSONObject()
+					.put("model", model)
+					.put("messages", JSONArray()
+						.put(JSONObject().put("role", "system").put("content", system))
+						.put(JSONObject().put("role", "user").put("content", user)))
+				val conn = URL("https://api.openai.com/v1/chat/completions").openConnection() as HttpURLConnection
+				conn.requestMethod = "POST"
+				conn.connectTimeout = 5000
+				conn.readTimeout = 15000
+				conn.doOutput = true
+				conn.setRequestProperty("Authorization", "Bearer $key")
+				conn.setRequestProperty("Content-Type", "application/json")
+				conn.outputStream.use { it.write(body.toString().toByteArray()) }
+				val code = conn.responseCode
+				if(code !in 200..299)
+				{
+					val err = conn.errorStream?.bufferedReader()?.readText()?.take(200) ?: ""
+					throw Exception("HTTP $code $err")
+				}
+				val json = JSONObject(conn.inputStream.bufferedReader().readText())
+				val tr = json.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
+				if(tr.isEmpty())
+					return@execute
+				mainHandler.post {
+					gptCache[norm] = tr
+					if(lastSource == norm)
+						show(tr)
+				}
+			}
+			catch(e: Exception)
+			{
+				Log.w(TAG, "ChatGPT hatası", e)
+				mainHandler.post {
+					if(!gptErrorShown)
+					{
+						gptErrorShown = true
+						Toast.makeText(surfaceView.context, "ChatGPT çevirisi çalışmadı: ${e.message}", Toast.LENGTH_LONG).show()
+					}
+				}
+			}
+		}
 	}
 
 	/** Küçük OCR farklarını (1-2 harf) aynı metin say. */

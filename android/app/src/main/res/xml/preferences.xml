@@ -79,6 +79,22 @@
     </PreferenceCategory>
 
     <PreferenceCategory
+        app:key="category_subtitle"
+        app:title="Türkçe Altyazı (ChatGPT)">
+        <EditTextPreference
+            app:key="openai_api_key"
+            app:title="OpenAI API anahtarı"
+            app:summary="Boşsa cihaz içi çeviri kullanılır. Doluysa çeviriler ChatGPT ile iyileştirilir."
+            app:icon="@drawable/ic_codec"/>
+        <EditTextPreference
+            app:key="openai_model"
+            app:title="ChatGPT modeli"
+            app:defaultValue="gpt-5.4-nano"
+            app:useSimpleSummaryProvider="true"
+            app:icon="@drawable/ic_codec"/>
+    </PreferenceCategory>
+
+    <PreferenceCategory
         app:key="category_export"
         app:title="@string/preferences_category_title_export">
         <Preference
