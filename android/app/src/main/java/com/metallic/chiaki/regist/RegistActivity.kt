@@ -55,6 +55,7 @@ class RegistActivity: AppCompatActivity(), RevealActivity
 		binding.psnLoginButton.setOnClickListener {
 			startActivityForResult(Intent(this, PsnLoginActivity::class.java), REQUEST_PSN_LOGIN)
 		}
+		binding.psnPasteButton.setOnClickListener { showPasteDialog() }
 		getPreferences(MODE_PRIVATE).getString(PREF_ACCOUNT_ID, null)?.let {
 			if(binding.psnIdEditText.text.isNullOrEmpty())
 				binding.psnIdEditText.setText(it)
@@ -148,6 +149,49 @@ class RegistActivity: AppCompatActivity(), RevealActivity
 		}
 	}
 
+	private fun showPasteDialog()
+	{
+		val input = android.widget.EditText(this)
+		input.hint = "remoteplay.dl.playstation.net/...code=..."
+		input.isSingleLine = true
+		com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+			.setTitle("Telefondan gelen adresi yapıştırın")
+			.setMessage("Telefonda giriş yaptıktan sonra tarayıcının adres çubuğundaki adresin tamamını kopyalayıp buraya yapıştırın.")
+			.setView(input)
+			.setPositiveButton("Tamam") { _, _ ->
+				val code = PsnAuth.extractCode(input.text.toString())
+				if(code == null)
+				{
+					android.widget.Toast.makeText(this, "Adreste giriş kodu bulunamadı", android.widget.Toast.LENGTH_LONG).show()
+					return@setPositiveButton
+				}
+				android.widget.Toast.makeText(this, "Account ID alınıyor…", android.widget.Toast.LENGTH_SHORT).show()
+				Thread {
+					try
+					{
+						val id = PsnAuth.fetchAccountId(code)
+						runOnUiThread { onAccountId(id) }
+					}
+					catch(e: Exception)
+					{
+						runOnUiThread {
+							android.widget.Toast.makeText(this, "Olmadı: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+						}
+					}
+				}.start()
+			}
+			.setNegativeButton("İptal", null)
+			.show()
+	}
+
+	private fun onAccountId(id: String)
+	{
+		binding.psnIdEditText.setText(id)
+		binding.psnIdEditText.error = null
+		getPreferences(MODE_PRIVATE).edit().putString(PREF_ACCOUNT_ID, id).apply()
+		android.widget.Toast.makeText(this, "Account ID bulundu: $id", android.widget.Toast.LENGTH_LONG).show()
+	}
+
 	override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?)
 	{
 		super.onActivityResult(requestCode, resultCode, data)
@@ -156,10 +200,7 @@ class RegistActivity: AppCompatActivity(), RevealActivity
 		if(requestCode == REQUEST_PSN_LOGIN && resultCode == RESULT_OK)
 		{
 			val id = data?.getStringExtra(PsnLoginActivity.EXTRA_ACCOUNT_ID) ?: return
-			binding.psnIdEditText.setText(id)
-			binding.psnIdEditText.error = null
-			getPreferences(MODE_PRIVATE).edit().putString(PREF_ACCOUNT_ID, id).apply()
-			android.widget.Toast.makeText(this, "Account ID bulundu: $id", android.widget.Toast.LENGTH_LONG).show()
+			onAccountId(id)
 		}
 	}
 }

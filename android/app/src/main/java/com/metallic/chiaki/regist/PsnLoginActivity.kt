@@ -22,23 +22,65 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * PSN hesabıyla giriş yapıp PSN Account ID'yi (Base64) otomatik bulur.
+ * PSN hesabıyla giriş yapıp PSN Account ID'yi (Base64) bulur.
  * (chiaki-ng masaüstü sürümündeki yöntemle aynı.)
  */
+object PsnAuth
+{
+	const val CLIENT_ID = "ba495a24-818c-472b-b12d-ff231c1b5745"
+	private const val CLIENT_SECRET = "mvaiZkRsAsI1IBkY"
+	const val REDIRECT = "https://remoteplay.dl.playstation.net/remoteplay/redirect"
+	private const val SCOPE = "psn:clientapp referenceDataService:countryConfig.read pushNotification:webSocket.desktop.connect sessionManager:remotePlaySession.system.update"
+	private const val TOKEN_URL = "https://auth.api.sonyentertainmentnetwork.com/2.0/oauth/token"
+	val LOGIN_URL = "https://auth.api.sonyentertainmentnetwork.com/2.0/oauth/authorize" +
+		"?service_entity=urn:service-entity:psn&response_type=code&client_id=$CLIENT_ID" +
+		"&redirect_uri=$REDIRECT&scope=" + Uri.encode(SCOPE) +
+		"&request_locale=tr_TR&ui=pr&service_logo=ps&layout_type=popup&smcid=remoteplay&prompt=always&PlatformPrivacyWs1=minimal"
+
+	private fun basicAuth() = "Basic " + Base64.encodeToString("$CLIENT_ID:$CLIENT_SECRET".toByteArray(), Base64.NO_WRAP)
+
+	/** Yapıştırılan yönlendirme adresinden (veya çıplak koddan) giriş kodunu çıkarır. */
+	fun extractCode(input: String): String?
+	{
+		val t = input.trim()
+		if(t.isEmpty())
+			return null
+		Regex("[?&]code=([^&\\s]+)").find(t)?.let { return Uri.decode(it.groupValues[1]) }
+		return if(t.contains("/") || t.contains(" ")) null else t
+	}
+
+	/** Giriş koduyla PSN Account ID'yi (Base64) alır. Ağ işlemi: arka planda çağırın. */
+	fun fetchAccountId(code: String): String
+	{
+		val body = "grant_type=authorization_code&code=" + URLEncoder.encode(code, "UTF-8") +
+			"&scope=" + URLEncoder.encode(SCOPE, "UTF-8") +
+			"&redirect_uri=" + URLEncoder.encode(REDIRECT, "UTF-8")
+		val tokenConn = URL(TOKEN_URL).openConnection() as HttpURLConnection
+		tokenConn.requestMethod = "POST"
+		tokenConn.doOutput = true
+		tokenConn.setRequestProperty("Authorization", basicAuth())
+		tokenConn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+		OutputStreamWriter(tokenConn.outputStream).use { it.write(body) }
+		if(tokenConn.responseCode !in 200..299)
+			throw Exception("Kod geçersiz veya süresi dolmuş (HTTP ${tokenConn.responseCode}). Telefonda girişi tekrarlayın.")
+		val token = JSONObject(tokenConn.inputStream.bufferedReader().readText()).getString("access_token")
+
+		val infoConn = URL("$TOKEN_URL/$token").openConnection() as HttpURLConnection
+		infoConn.setRequestProperty("Authorization", basicAuth())
+		if(infoConn.responseCode !in 200..299)
+			throw Exception("Hesap bilgisi alınamadı (HTTP ${infoConn.responseCode})")
+		val userId = JSONObject(infoConn.inputStream.bufferedReader().readText()).getString("user_id").toLong()
+		val bytes = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(userId).array()
+		return Base64.encodeToString(bytes, Base64.NO_WRAP)
+	}
+}
+
+/** TV'de doğrudan giriş (Sony bazen reddedebilir; o zaman telefon yöntemi kullanılır). */
 class PsnLoginActivity : AppCompatActivity()
 {
 	companion object
 	{
 		const val EXTRA_ACCOUNT_ID = "psn_account_id"
-		private const val CLIENT_ID = "ba495a24-818c-472b-b12d-ff231c1b5745"
-		private const val CLIENT_SECRET = "mvaiZkRsAsI1IBkY"
-		private const val REDIRECT = "https://remoteplay.dl.playstation.net/remoteplay/redirect"
-		private const val SCOPE = "psn:clientapp referenceDataService:countryConfig.read pushNotification:webSocket.desktop.connect sessionManager:remotePlaySession.system.update"
-		private const val TOKEN_URL = "https://auth.api.sonyentertainmentnetwork.com/2.0/oauth/token"
-		private val LOGIN_URL = "https://auth.api.sonyentertainmentnetwork.com/2.0/oauth/authorize" +
-			"?service_entity=urn:service-entity:psn&response_type=code&client_id=$CLIENT_ID" +
-			"&redirect_uri=$REDIRECT&scope=" + Uri.encode(SCOPE) +
-			"&request_locale=tr_TR&ui=pr&service_logo=ps&layout_type=popup&smcid=remoteplay&prompt=always&PlatformPrivacyWs1=minimal"
 	}
 
 	private var handled = false
@@ -65,17 +107,17 @@ class PsnLoginActivity : AppCompatActivity()
 					view.stopLoading()
 			}
 		}
-		webView.loadUrl(LOGIN_URL)
+		webView.loadUrl(PsnAuth.LOGIN_URL)
 	}
 
 	private fun checkRedirect(url: String): Boolean
 	{
-		if(!url.startsWith(REDIRECT))
+		if(!url.startsWith(PsnAuth.REDIRECT))
 			return false
 		if(handled)
 			return true
 		handled = true
-		val code = Uri.parse(url).getQueryParameter("code")
+		val code = PsnAuth.extractCode(url)
 		if(code == null)
 		{
 			fail("Giriş kodu alınamadı")
@@ -85,7 +127,7 @@ class PsnLoginActivity : AppCompatActivity()
 		Thread {
 			try
 			{
-				val id = fetchAccountId(code)
+				val id = PsnAuth.fetchAccountId(code)
 				runOnUiThread {
 					setResult(RESULT_OK, Intent().putExtra(EXTRA_ACCOUNT_ID, id))
 					finish()
@@ -97,32 +139,6 @@ class PsnLoginActivity : AppCompatActivity()
 			}
 		}.start()
 		return true
-	}
-
-	private fun basicAuth() = "Basic " + Base64.encodeToString("$CLIENT_ID:$CLIENT_SECRET".toByteArray(), Base64.NO_WRAP)
-
-	private fun fetchAccountId(code: String): String
-	{
-		val body = "grant_type=authorization_code&code=" + URLEncoder.encode(code, "UTF-8") +
-			"&scope=" + URLEncoder.encode(SCOPE, "UTF-8") +
-			"&redirect_uri=" + URLEncoder.encode(REDIRECT, "UTF-8")
-		val tokenConn = URL(TOKEN_URL).openConnection() as HttpURLConnection
-		tokenConn.requestMethod = "POST"
-		tokenConn.doOutput = true
-		tokenConn.setRequestProperty("Authorization", basicAuth())
-		tokenConn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-		OutputStreamWriter(tokenConn.outputStream).use { it.write(body) }
-		if(tokenConn.responseCode !in 200..299)
-			throw Exception("Token hatası: HTTP ${tokenConn.responseCode}")
-		val token = JSONObject(tokenConn.inputStream.bufferedReader().readText()).getString("access_token")
-
-		val infoConn = URL("$TOKEN_URL/$token").openConnection() as HttpURLConnection
-		infoConn.setRequestProperty("Authorization", basicAuth())
-		if(infoConn.responseCode !in 200..299)
-			throw Exception("Hesap bilgisi hatası: HTTP ${infoConn.responseCode}")
-		val userId = JSONObject(infoConn.inputStream.bufferedReader().readText()).getString("user_id").toLong()
-		val bytes = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(userId).array()
-		return Base64.encodeToString(bytes, Base64.NO_WRAP)
 	}
 
 	private fun fail(msg: String)
