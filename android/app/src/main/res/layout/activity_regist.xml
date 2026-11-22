@@ -161,6 +161,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:text="Telefonda giriş yaptım: adresi yapıştır"
+                android:textColor="#FFFFFF"
+                app:strokeColor="#FFFFFF"
                 app:layout_constraintTop_toBottomOf="@id/psnLoginButton"/>
 
             <com.google.android.material.textview.MaterialTextView

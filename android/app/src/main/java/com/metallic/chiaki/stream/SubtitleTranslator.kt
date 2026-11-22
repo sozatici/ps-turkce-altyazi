@@ -35,18 +35,17 @@ class SubtitleTranslator(
 	companion object
 	{
 		private const val TAG = "SubtitleTranslator"
-		private const val CAPTURE_INTERVAL_MS = 500L
+		private const val CAPTURE_INTERVAL_MS = 300L
 		private const val HIDE_AFTER_MS = 1500L
 
-		// Yakalanan karenin boyutu (OCR için yeterli, hızlı)
-		private const val CAPTURE_W = 1280
-		private const val CAPTURE_H = 720
+		// Altyazı bölgesi en az bu genişlikte okunur (küçükse büyütülür)
+		private const val MIN_OCR_W = 1600
 
 		// Altyazının arandığı bölge (oran olarak)
-		private const val REGION_TOP = 0.68f
-		private const val REGION_BOTTOM = 0.98f
-		private const val REGION_LEFT = 0.20f   // sol alttaki mini haritayı atla
-		private const val REGION_RIGHT = 0.88f
+		private const val REGION_TOP = 0.66f
+		private const val REGION_BOTTOM = 0.985f
+		private const val REGION_LEFT = 0.17f   // sol alttaki mini haritayı atla
+		private const val REGION_RIGHT = 0.90f
 	}
 
 	private val mainHandler = Handler(Looper.getMainLooper())
@@ -62,10 +61,10 @@ class SubtitleTranslator(
 
 	private var running = false
 	private var busy = false
+	private var useFullFrame = false   // bölge kopyalama desteklenmezse tüm kareyi kopyala
 	private var modelReady = false
 
 	private var lastSource = ""        // en son çevrilen metin (normalize)
-	private var candidate = ""         // bir önceki karede görülen metin
 	private var lastSeenTime = 0L
 	private val cache = LinkedHashMap<String, String>(64, 0.75f, true)
 
@@ -134,18 +133,44 @@ class SubtitleTranslator(
 			val handler = copyHandler ?: return
 
 			busy = true
-			val bitmap = Bitmap.createBitmap(CAPTURE_W, CAPTURE_H, Bitmap.Config.ARGB_8888)
+			val frame = surfaceView.holder.surfaceFrame
+			val sw = if(frame.width() > 0) frame.width() else surfaceView.width
+			val sh = if(frame.height() > 0) frame.height() else surfaceView.height
+			val src = Rect(0, (sh * REGION_TOP).toInt(), sw, (sh * REGION_BOTTOM).toInt())
+			val scale = if(src.width() < MIN_OCR_W) MIN_OCR_W.toFloat() / src.width() else 1f
+			val full = useFullFrame
+			val bitmap = if(full)
+				Bitmap.createBitmap((sw * scale).toInt(), (sh * scale).toInt(), Bitmap.Config.ARGB_8888)
+			else
+				Bitmap.createBitmap((src.width() * scale).toInt(), (src.height() * scale).toInt(), Bitmap.Config.ARGB_8888)
 			try
 			{
-				PixelCopy.request(surfaceView, bitmap, { result ->
+				val listener = PixelCopy.OnPixelCopyFinishedListener { result ->
 					if(result == PixelCopy.SUCCESS)
-						recognize(bitmap)
+					{
+						if(full)
+						{
+							val top = (bitmap.height * REGION_TOP).toInt()
+							val bottom = (bitmap.height * REGION_BOTTOM).toInt()
+							val crop = Bitmap.createBitmap(bitmap, 0, top, bitmap.width, bottom - top)
+							bitmap.recycle()
+							recognize(crop)
+						}
+						else
+							recognize(bitmap)
+					}
 					else
 					{
+						if(!full)
+							useFullFrame = true
 						bitmap.recycle()
 						busy = false
 					}
-				}, handler)
+				}
+				if(full)
+					PixelCopy.request(surfaceView, bitmap, listener, handler)
+				else
+					PixelCopy.request(surfaceView, src, bitmap, listener, handler)
 			}
 			catch(e: Exception)
 			{
@@ -156,12 +181,8 @@ class SubtitleTranslator(
 		}
 	}
 
-	private fun recognize(full: Bitmap)
+	private fun recognize(crop: Bitmap)
 	{
-		val top = (CAPTURE_H * REGION_TOP).toInt()
-		val bottom = (CAPTURE_H * REGION_BOTTOM).toInt()
-		val crop = Bitmap.createBitmap(full, 0, top, CAPTURE_W, bottom - top)
-		full.recycle()
 
 		recognizer.process(InputImage.fromBitmap(crop, 0))
 			.addOnSuccessListener { text ->
@@ -202,7 +223,6 @@ class SubtitleTranslator(
 		val norm = normalize(raw)
 		if(norm.length < 4)
 		{
-			candidate = ""
 			return
 		}
 
@@ -213,12 +233,9 @@ class SubtitleTranslator(
 			return
 		}
 
-		// Yeni metni iki ardışık karede görünce çevir (geçiş anındaki bozuk okumaları ele)
-		if(!similar(norm, candidate))
-		{
-			candidate = norm
+		// Altyazı yazılırken/silinirken kısmi okunan metni ele: önceki metnin bir parçasıysa bekle
+		if(lastSource.isNotEmpty() && lastSource.contains(norm) && SystemClock.uptimeMillis() - lastSeenTime < 600)
 			return
-		}
 
 		lastSource = norm
 		lastSeenTime = SystemClock.uptimeMillis()
