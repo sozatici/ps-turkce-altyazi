@@ -55,6 +55,11 @@
             android:name=".settings.SettingsActivity" />
 
         <activity
+            android:name=".regist.PsnLoginActivity"
+            android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize" />
+
+        <activity
             android:name=".regist.RegistActivity"
             android:theme="@style/MageTheme"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize"

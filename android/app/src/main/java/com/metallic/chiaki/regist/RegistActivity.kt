@@ -28,6 +28,8 @@ class RegistActivity: AppCompatActivity(), RevealActivity
 		private const val PIN_LENGTH = 8
 
 		private const val REQUEST_REGIST = 1
+		private const val REQUEST_PSN_LOGIN = 2
+		private const val PREF_ACCOUNT_ID = "psn_account_id_b64"
 	}
 
 	private lateinit var viewModel: RegistViewModel
@@ -50,6 +52,13 @@ class RegistActivity: AppCompatActivity(), RevealActivity
 		binding.broadcastCheckBox.isChecked = intent.getBooleanExtra(EXTRA_BROADCAST, true)
 
 		binding.registButton.setOnClickListener { doRegist() }
+		binding.psnLoginButton.setOnClickListener {
+			startActivityForResult(Intent(this, PsnLoginActivity::class.java), REQUEST_PSN_LOGIN)
+		}
+		getPreferences(MODE_PRIVATE).getString(PREF_ACCOUNT_ID, null)?.let {
+			if(binding.psnIdEditText.text.isNullOrEmpty())
+				binding.psnIdEditText.setText(it)
+		}
 
 		binding.ps4VersionRadioGroup.check(when(viewModel.ps4Version.value ?: RegistViewModel.ConsoleVersion.PS5) {
 			RegistViewModel.ConsoleVersion.PS5 -> R.id.ps5RadioButton
@@ -144,5 +153,13 @@ class RegistActivity: AppCompatActivity(), RevealActivity
 		super.onActivityResult(requestCode, resultCode, data)
 		if(requestCode == REQUEST_REGIST && resultCode == RESULT_OK)
 			finish()
+		if(requestCode == REQUEST_PSN_LOGIN && resultCode == RESULT_OK)
+		{
+			val id = data?.getStringExtra(PsnLoginActivity.EXTRA_ACCOUNT_ID) ?: return
+			binding.psnIdEditText.setText(id)
+			binding.psnIdEditText.error = null
+			getPreferences(MODE_PRIVATE).edit().putString(PREF_ACCOUNT_ID, id).apply()
+			android.widget.Toast.makeText(this, "Account ID bulundu: $id", android.widget.Toast.LENGTH_LONG).show()
+		}
 	}
 }
